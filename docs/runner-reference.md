@@ -58,7 +58,7 @@ export async function POST(request: Request) {
 
 ```env
 TRACEKIT_RUNNER_TOKEN=<the token you set in tracekit's Settings page>
-TRACEKIT_API_URL=http://localhost:3000  # or your deployed tracekit URL
+TRACEKIT_API_URL=https://tracekit.vercel.app  # or your deployed tracekit URL
 ```
 
 Note: `TRACEKIT_INGEST_TOKEN` is passed dynamically via `callback_token` in the request body, so the runner doesn't need it pre-configured.

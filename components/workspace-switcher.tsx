@@ -136,7 +136,7 @@ await track(
 );`}
             </pre>
             <div className="text-xs bg-muted p-4 rounded-md overflow-auto max-h-48 font-mono">
-              <p>TRACEKIT_API_URL=http://localhost:3001</p>
+              <p>TRACEKIT_API_URL=https://tracekit.vercel.app</p>
               <p>TRACEKIT_INGEST_TOKEN=&lt;your token&gt;</p>
             </div>
           </div>

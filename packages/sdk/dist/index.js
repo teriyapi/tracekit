@@ -25,7 +25,7 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 function getApiUrl() {
-  return process.env.TRACEKIT_API_URL || "http://localhost:3001";
+  return process.env.TRACEKIT_API_URL || "https://tracekit.vercel.app";
 }
 function getIngestToken() {
   return process.env.TRACEKIT_INGEST_TOKEN || "";

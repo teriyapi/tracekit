@@ -5,7 +5,7 @@ import type { TrackOptions, RunExperimentOptions } from "./types";
 export type { TrackOptions, TrackResult, RunExperimentOptions } from "./types";
 
 function getApiUrl(): string {
-  return process.env.TRACEKIT_API_URL || "http://localhost:3001";
+  return process.env.TRACEKIT_API_URL || "https://tracekit.vercel.app";
 }
 
 function getIngestToken(): string {
