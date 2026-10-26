@@ -39,13 +39,17 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
+  /* Square-ish everywhere: 4px corners, 2px for anything inset in a 4px container. Chat bubbles opt out (see bubbles.ts). */
+  --radius-sm: 2px;
+  --radius-md: var(--radius);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  --radius-xl: var(--radius);
+  --radius-2xl: var(--radius);
+  --radius-3xl: var(--radius);
+  --radius-4xl: var(--radius);
+  --color-verdict-hit: var(--verdict-hit);
+  --color-verdict-miss: var(--verdict-miss);
+  --color-verdict-cringe: var(--verdict-cringe);
 }
 
 :root {
@@ -72,7 +76,7 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --radius: 0.75rem;
+  --radius: 4px;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -81,6 +85,10 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  /* Verdicts are the only saturated colors in the app. */
+  --verdict-hit: oklch(0.55 0.08 155);
+  --verdict-miss: oklch(0.6 0.08 75);
+  --verdict-cringe: oklch(0.56 0.1 350);
 }
 
 .dark {
@@ -115,6 +123,9 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --verdict-hit: oklch(0.76 0.08 155);
+  --verdict-miss: oklch(0.8 0.08 75);
+  --verdict-cringe: oklch(0.74 0.09 350);
 }
 
 @layer base {
@@ -133,7 +144,7 @@
     width: 16px;
     height: 16px;
     border: 1.5px solid oklch(0.708 0 0);
-    border-radius: 5px;
+    border-radius: var(--radius);
     background: transparent;
     cursor: pointer;
     position: relative;
@@ -156,4 +167,17 @@
     border-width: 0 2px 2px 0;
     transform: rotate(45deg);
   }
+}
+
+/* Rubric criteria arriving after a draft. */
+@keyframes criterion-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+@layer utilities {
+  .criterion-in { animation: criterion-in 220ms ease-out both; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .criterion-in { animation: none; }
 }

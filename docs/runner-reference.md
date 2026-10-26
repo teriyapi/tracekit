@@ -15,7 +15,7 @@ This file documents how to set up a runner endpoint in your agent's repo so trac
 // In your agent's repo: app/api/tracekit-runner/route.ts
 
 import { NextResponse } from "next/server";
-import { runExperiment } from "tracekit-sdk"; // or relative import from tracekit repo
+import { runExperiment } from "@teriyapi/tracekit-sdk";
 import { yourAgent } from "@/lib/your-agent"; // your actual agent
 
 export async function POST(request: Request) {

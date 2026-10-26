@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod/v4";
 import { getServerSupabase } from "@/lib/db/server";
-import { isAuthenticated, hasValidIngestToken } from "@/lib/auth";
+import { isOwner, hasValidIngestToken } from "@/lib/auth";
 
 const CreateExperimentSchema = z.object({
   name: z.string(),
@@ -11,7 +11,7 @@ const CreateExperimentSchema = z.object({
 
 export async function POST(request: Request) {
   // Auth: dashboard cookie OR ingest token
-  const authed = await isAuthenticated();
+  const authed = await isOwner();
   const hasToken = hasValidIngestToken(request);
   if (!authed && !hasToken) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
       name: data.name,
       agent: data.agent,
       dataset: data.dataset,
-      status: "running",
+      status: "pending",
       trace_count: 0,
     })
     .select("id")

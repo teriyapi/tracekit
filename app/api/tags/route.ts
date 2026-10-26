@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod/v4";
 import { getServerSupabase } from "@/lib/db/server";
-import { isAuthenticated } from "@/lib/auth";
+import { isAuthenticated, isOwner } from "@/lib/auth";
 
 const CreateTagSchema = z.object({
   name: z.string().min(1),
@@ -28,7 +28,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const authed = await isAuthenticated();
+  const authed = await isOwner();
   if (!authed) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

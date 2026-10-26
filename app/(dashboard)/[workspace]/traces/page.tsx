@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { getRole } from "@/lib/auth";
 import { getServerSupabase } from "@/lib/db/server";
 import { TracesTableClient } from "./traces-table-client";
 import { TracesTableSkeleton } from "./traces-table-skeleton";
@@ -36,6 +37,7 @@ async function TracesData({ workspace }: { workspace: string }) {
     <TracesTableClient
       initialTraces={(data || []) as TraceWithLatestAnnotation[]}
       workspace={workspace}
+      readOnly={(await getRole()) !== "owner"}
     />
   );
 }

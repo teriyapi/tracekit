@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { getRole } from "@/lib/auth";
 import { getServerSupabase } from "@/lib/db/server";
 import { ExperimentsTabClient } from "./experiments-tab-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,6 +23,7 @@ async function ExperimentsData({ workspace }: { workspace: string }) {
     <ExperimentsTabClient
       initialExperiments={(data || []) as ExperimentWithStats[]}
       workspace={workspace}
+      readOnly={(await getRole()) !== "owner"}
     />
   );
 }

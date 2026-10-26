@@ -1,53 +1,44 @@
 import { cookies } from "next/headers";
-import crypto from "crypto";
+import { COOKIE_NAME, SESSION_MAX_AGE_SECONDS, signSession, verifySession, type Role } from "./session";
 
-const COOKIE_NAME = "tracekit_auth";
+export type { Role };
 
 /**
- * Signs a value using HMAC-SHA256 with DASHBOARD_PASSWORD as the secret.
- * Limitation: using the password itself as the HMAC key is acceptable for
- * single-user/solo deployments but should be replaced with a dedicated
- * secret in a multi-user setup.
+ * Limitation: the session is signed with DASHBOARD_PASSWORD itself. That is
+ * acceptable for a solo deployment but should be a dedicated secret in a
+ * multi-user setup. Changing the password signs everyone out.
  */
-function sign(value: string): string {
-  const secret = process.env.DASHBOARD_PASSWORD!;
-  return crypto.createHmac("sha256", secret).update(value).digest("hex");
-}
-
-export function createAuthCookie(): {
+export async function createAuthCookie(role: Role): Promise<{
   name: string;
   value: string;
   options: Record<string, unknown>;
-} {
-  const payload = "authenticated";
-  const signature = sign(payload);
-  const value = `${payload}.${signature}`;
+}> {
   return {
     name: COOKIE_NAME,
-    value,
+    value: await signSession(role),
     options: {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       path: "/",
       sameSite: "lax" as const,
-      maxAge: 60 * 60 * 24 * 7, // 7 days
+      maxAge: SESSION_MAX_AGE_SECONDS,
     },
   };
 }
 
-export async function isAuthenticated(): Promise<boolean> {
+export async function getRole(): Promise<Role | null> {
   const cookieStore = await cookies();
-  const cookie = cookieStore.get(COOKIE_NAME);
-  if (!cookie) return false;
+  return verifySession(cookieStore.get(COOKIE_NAME)?.value);
+}
 
-  const [payload, signature] = cookie.value.split(".");
-  if (!payload || !signature) return false;
+/** Any signed-in session, owner or read-only demo. Use for reads. */
+export async function isAuthenticated(): Promise<boolean> {
+  return (await getRole()) !== null;
+}
 
-  const expected = sign(payload);
-  return crypto.timingSafeEqual(
-    Buffer.from(signature, "hex"),
-    Buffer.from(expected, "hex")
-  );
+/** The owner session. Use for writes, so the demo stays read-only even where the proxy lets a path through. */
+export async function isOwner(): Promise<boolean> {
+  return (await getRole()) === "owner";
 }
 
 export function hasValidIngestToken(request: Request): boolean {

@@ -5,7 +5,7 @@ import { getServerSupabase } from "@/lib/db/server";
 const IngestSchema = z.object({
   agent: z.string(),
   source: z.enum(["live", "experiment"]),
-  experiment_id: z.string().optional(),
+  experiment_id: z.uuid().optional(),
   input: z.record(z.string(), z.unknown()),
   output: z.string(),
   model: z.string().optional(),
@@ -50,19 +50,30 @@ export async function POST(request: Request) {
 
   const supabase = getServerSupabase();
 
+  if (data.experiment_id) {
+    const { data: experiment } = await supabase
+      .from("experiments")
+      .select("id")
+      .eq("id", data.experiment_id)
+      .maybeSingle();
+    if (!experiment) {
+      return NextResponse.json({ error: "Experiment not found" }, { status: 404 });
+    }
+  }
+
   // Insert trace
   const { data: inserted, error: insertError } = await supabase
     .from("traces")
     .insert({
       agent: data.agent,
       source: data.source,
-      experiment_id: data.experiment_id || null,
+      experiment_id: data.experiment_id ?? null,
       input: data.input,
       output: data.output,
-      model: data.model || null,
-      latency_ms: data.latency_ms || null,
-      cost_usd: data.cost_usd || null,
-      metadata: data.metadata || {},
+      model: data.model ?? null,
+      latency_ms: data.latency_ms ?? null,
+      cost_usd: data.cost_usd ?? null,
+      metadata: data.metadata ?? {},
     })
     .select("id")
     .single();
@@ -76,6 +87,13 @@ export async function POST(request: Request) {
 
   // If experiment source, increment trace_count
   if (data.source === "experiment" && data.experiment_id) {
+    // The first trace is the signal that the runner picked it up
+    await supabase
+      .from("experiments")
+      .update({ status: "running" })
+      .eq("id", data.experiment_id)
+      .eq("status", "pending");
+
     await supabase.rpc("increment_trace_count", {
       exp_id: data.experiment_id,
     }).then(async (rpcResult) => {

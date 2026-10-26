@@ -25,8 +25,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import type { TraceWithLatestAnnotation } from "@/lib/db/types";
 import { relativeTime, cn } from "@/lib/utils";
 import { TraceSheet } from "./trace-sheet";
+import type { AnnotationPatch } from "@/components/traces/trace-sheet";
+import { isVerdict } from "@/lib/verdicts";
 import { TagFilter } from "./tag-filter";
 import { useSelection } from "@/lib/context/selection";
+import { Segmented } from "@/components/ui/segmented";
+import { useStoredView } from "@/lib/stored-view";
+import { LiveConvoList } from "./live-convo-list";
+
 
 function getInputPreview(input: Record<string, unknown>): string {
   if (input.user_message && typeof input.user_message === "string") {
@@ -40,9 +46,11 @@ function getInputPreview(input: Record<string, unknown>): string {
 export function TracesTableClient({
   initialTraces,
   workspace,
+  readOnly = false,
 }: {
   initialTraces: TraceWithLatestAnnotation[];
   workspace: string;
+  readOnly?: boolean;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -56,6 +64,7 @@ export function TracesTableClient({
   const [sheetOpen, setSheetOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [searchInput, setSearchInput] = useState(searchParams.get("q") || "");
+  const [view, setView] = useStoredView("tracekit:traces-view");
 
   // Current filter values from URL
   const agentFilter = searchParams.get("agent") || "";
@@ -82,6 +91,8 @@ export function TracesTableClient({
     if (ratingFilter) params.set("rating", ratingFilter);
     tagFilter.forEach((t) => params.append("tag", t));
     if (qFilter) params.set("q", qFilter);
+    // This tab only ever shows live traces; experiment runs live on the Experiments tab
+    params.set("source", "live");
     if (cursor) params.set("cursor", cursor);
 
     const res = await fetch(`/api/traces?${params.toString()}`);
@@ -156,6 +167,11 @@ export function TracesTableClient({
     fetchTraces();
   }
 
+  // Patch the row in place so fast triage doesn't refetch (and reorder) the list
+  function handleTagsSaved(traceId: string, patch: AnnotationPatch) {
+    setTraces((prev) => prev.map((t) => (t.id === traceId ? { ...t, ...patch } : t)));
+  }
+
   if (traces.length === 0 && !loading && !hasFilters) {
     return (
       <Card className="mt-8">
@@ -164,7 +180,7 @@ export function TracesTableClient({
             No traces yet. Send some traces to <code className="text-foreground">/api/ingest</code> from your agent to see them here.
           </p>
           <pre className="text-left text-xs bg-muted p-4 rounded-md inline-block mx-auto overflow-auto max-h-48">
-{`curl -X POST http://localhost:3000/api/ingest \\
+{`curl -X POST ${process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3005"}/api/ingest \\
   -H "x-tracekit-token: <YOUR_TOKEN>" \\
   -H "Content-Type: application/json" \\
   -d '{"agent":"my-agent","source":"live","input":{"user_message":"hello"},"output":"hi!"}'`}
@@ -176,11 +192,22 @@ export function TracesTableClient({
 
   return (
     <div className="space-y-4">
+      <h1 className="sr-only">Live traces</h1>
       {/* Filter bar */}
       <div className="flex flex-wrap gap-3 items-center">
+        <Segmented
+          label="View"
+          value={view}
+          onChange={setView}
+          options={[
+            { value: "convo", label: "convo" },
+            { value: "table", label: "table" },
+          ]}
+        />
+
         {isAllWorkspace && (
           <Select value={agentFilter || "all"} onValueChange={(v: string | null) => updateParam("agent", !v || v === "all" ? "" : v)}>
-            <SelectTrigger className="w-40">
+            <SelectTrigger className="w-40" aria-label="Agent">
               <SelectValue placeholder="All agents" />
             </SelectTrigger>
             <SelectContent>
@@ -193,7 +220,7 @@ export function TracesTableClient({
         )}
 
         <Select value={ratingFilter || "all"} onValueChange={(v: string | null) => updateParam("rating", !v || v === "all" ? "" : v)}>
-          <SelectTrigger className="w-32">
+          <SelectTrigger className="w-32" aria-label="Rating">
             <SelectValue placeholder="All ratings" />
           </SelectTrigger>
           <SelectContent>
@@ -211,6 +238,7 @@ export function TracesTableClient({
 
         <Input
           placeholder="search input/output…"
+          aria-label="Search input and output"
           className="flex-1 min-w-48"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
@@ -223,12 +251,21 @@ export function TracesTableClient({
         )}
       </div>
 
-      {/* Table */}
+      {view === "convo" ? (
+        <LiveConvoList
+          traces={traces}
+          showAgent={isAllWorkspace}
+          readOnly={readOnly}
+          paused={sheetOpen}
+          onTagsSaved={handleTagsSaved}
+          onOpenDetails={handleRowClick}
+        />
+      ) : (
       <div className="border rounded-md">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-10"></TableHead>
+              <TableHead className="w-10"><span className="sr-only">Select</span></TableHead>
               <TableHead className="w-24">Time</TableHead>
               {isAllWorkspace && <TableHead className="w-28">Agent</TableHead>}
               <TableHead>Input</TableHead>
@@ -248,6 +285,7 @@ export function TracesTableClient({
                 <TableCell onClick={(e) => e.stopPropagation()}>
                   <input
                     type="checkbox"
+                    aria-label="Select trace"
                     checked={isTraceSelected(trace.id)}
                     onChange={() => toggleTrace(trace.id)}
                     className={cn(isLastSelected(trace.id) && "ring-1 ring-foreground ring-offset-1 ring-offset-background")}
@@ -280,14 +318,14 @@ export function TracesTableClient({
                 </TableCell>
                 <TableCell>
                   <div className="flex gap-1 flex-wrap">
-                    {(trace.latest_tags || []).slice(0, 3).map((tag) => (
+                    {(trace.latest_tags || []).filter((t) => !isVerdict(t)).slice(0, 3).map((tag) => (
                       <Badge key={tag} variant="outline" className="text-xs">
                         {tag}
                       </Badge>
                     ))}
-                    {(trace.latest_tags || []).length > 3 && (
+                    {(trace.latest_tags || []).filter((t) => !isVerdict(t)).length > 3 && (
                       <span className="text-xs text-muted-foreground">
-                        +{(trace.latest_tags || []).length - 3}
+                        +{(trace.latest_tags || []).filter((t) => !isVerdict(t)).length - 3}
                       </span>
                     )}
                   </div>
@@ -297,6 +335,7 @@ export function TracesTableClient({
           </TableBody>
         </Table>
       </div>
+      )}
 
       {/* Load more */}
       {traces.length > 0 && traces.length % 100 === 0 && (
@@ -319,6 +358,8 @@ export function TracesTableClient({
         open={sheetOpen}
         onOpenChange={setSheetOpen}
         onAnnotationSaved={handleAnnotationSaved}
+        onTagsSaved={handleTagsSaved}
+        readOnly={readOnly}
         traces={traces}
         onNavigate={(t) => { setSelectedTrace(t); }}
       />

@@ -45,7 +45,7 @@ export function TagFilter({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger className="inline-flex h-9 items-center justify-center rounded-lg border border-input bg-transparent px-3 text-sm font-medium whitespace-nowrap transition-colors hover:bg-muted dark:border-input dark:bg-input/30 dark:hover:bg-input/50">
+      <PopoverTrigger className="inline-flex h-8 items-center justify-center rounded-lg border border-input bg-transparent px-3 text-sm font-medium whitespace-nowrap transition-colors hover:bg-muted dark:border-input dark:bg-input/30 dark:hover:bg-input/50">
         {selectedTags.length > 0 ? (
           <span className="flex gap-1 items-center">
             Tags

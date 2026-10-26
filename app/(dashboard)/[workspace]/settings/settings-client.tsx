@@ -12,15 +12,21 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import type { AgentRunner } from "@/lib/db/types";
+import type { PublicAgentRunner } from "@/lib/db/types";
 import { relativeTime } from "@/lib/utils";
+
+const READ_ONLY_TITLE = "Read-only demo";
+
+type SaveField = (agent: string, field: "runner_url" | "runner_token", value: string) => void;
 
 export function SettingsClient({
   initialRunners,
   workspace,
+  readOnly = false,
 }: {
-  initialRunners: AgentRunner[];
+  initialRunners: PublicAgentRunner[];
   workspace: string;
+  readOnly?: boolean;
 }) {
   const [runners, setRunners] = useState(initialRunners);
   const isAllWorkspace = workspace === "all";
@@ -41,8 +47,8 @@ export function SettingsClient({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         agent,
-        runner_url: (isAllWorkspace ? newUrl.trim() : newUrl.trim()) || undefined,
-        runner_token: (isAllWorkspace ? newToken.trim() : newToken.trim()) || undefined,
+        runner_url: newUrl.trim() || undefined,
+        runner_token: newToken.trim() || undefined,
       }),
     });
     if (res.ok) {
@@ -88,17 +94,12 @@ export function SettingsClient({
     }
   }
 
-  async function handleSave(agent: string, field: "runner_url" | "runner_token", value: string) {
-    const existing = runners.find((r) => r.agent === agent);
-    if (!existing) return;
+  // Sends only the edited field; the server keeps the other one
+  const handleSave: SaveField = async (agent, field, value) => {
     const res = await fetch("/api/agent-runners", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        agent,
-        runner_url: field === "runner_url" ? value : existing.runner_url,
-        runner_token: field === "runner_token" ? value : existing.runner_token,
-      }),
+      body: JSON.stringify({ agent, [field]: value }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -107,33 +108,40 @@ export function SettingsClient({
     } else {
       toast.error("Failed to save");
     }
-  }
+  };
 
   // Per-workspace: show single runner config
   if (!isAllWorkspace) {
-    if (!singleRunner || (!singleRunner.runner_url && !singleRunner.runner_token)) {
+    if (!singleRunner || (!singleRunner.runner_url && !singleRunner.has_token)) {
       return (
         <div className="space-y-6">
-          <h2 className="text-lg font-semibold">{workspace} Settings</h2>
+          <h1 className="text-lg font-semibold">{workspace} Settings</h1>
           <div className="border rounded-md p-6 space-y-4">
             <p className="text-muted-foreground">No runner configured for this agent.</p>
             <p className="text-sm text-muted-foreground">
               Configure a runner URL and token so tracekit can trigger experiment runs against this agent remotely.
             </p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Input
                 placeholder="Runner URL"
                 value={newUrl}
                 onChange={(e) => setNewUrl(e.target.value)}
+                disabled={readOnly}
               />
               <Input
                 placeholder="Runner token"
                 type="password"
                 value={newToken}
                 onChange={(e) => setNewToken(e.target.value)}
+                disabled={readOnly}
               />
             </div>
-            <Button size="sm" onClick={handleAdd} disabled={!newUrl.trim()}>
+            <Button
+              size="sm"
+              onClick={handleAdd}
+              disabled={!newUrl.trim() || readOnly}
+              title={readOnly ? READ_ONLY_TITLE : undefined}
+            >
               Save runner config
             </Button>
           </div>
@@ -143,7 +151,7 @@ export function SettingsClient({
 
     return (
       <div className="space-y-6">
-        <h2 className="text-lg font-semibold">{workspace} Settings</h2>
+        <h1 className="text-lg font-semibold">{workspace} Settings</h1>
         <div className="border rounded-md">
           <Table>
             <TableHeader>
@@ -151,15 +159,25 @@ export function SettingsClient({
                 <TableHead>Runner URL</TableHead>
                 <TableHead>Token</TableHead>
                 <TableHead className="w-28">Updated</TableHead>
-                <TableHead className="w-32"></TableHead>
+                <TableHead className="w-32"><span className="sr-only">Actions</span></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              <SingleRunnerRow
-                runner={singleRunner}
-                onSave={handleSave}
-                onClear={handleClearRunner}
-              />
+              <TableRow>
+                <RunnerCells runner={singleRunner} onSave={handleSave} readOnly={readOnly} />
+                <TableCell>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-destructive"
+                    onClick={() => handleClearRunner(singleRunner.agent)}
+                    disabled={readOnly}
+                    title={readOnly ? READ_ONLY_TITLE : undefined}
+                  >
+                    Remove config
+                  </Button>
+                </TableCell>
+              </TableRow>
             </TableBody>
           </Table>
         </div>
@@ -185,12 +203,22 @@ export function SettingsClient({
           </TableHeader>
           <TableBody>
             {runners.map((runner) => (
-              <RunnerRow
-                key={runner.agent}
-                runner={runner}
-                onSave={handleSave}
-                onDelete={handleDelete}
-              />
+              <TableRow key={runner.agent}>
+                <TableCell className="font-medium">{runner.agent}</TableCell>
+                <RunnerCells runner={runner} onSave={handleSave} readOnly={readOnly} />
+                <TableCell>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-destructive"
+                    onClick={() => handleDelete(runner.agent)}
+                    disabled={readOnly}
+                    title={readOnly ? READ_ONLY_TITLE : undefined}
+                  >
+                    Delete
+                  </Button>
+                </TableCell>
+              </TableRow>
             ))}
             {runners.length === 0 && (
               <TableRow>
@@ -204,50 +232,60 @@ export function SettingsClient({
       </div>
 
       {/* Add new runner */}
-      <div className="border rounded-md p-4 space-y-3">
-        <p className="text-sm font-medium">+ Add agent runner</p>
-        <div className="grid grid-cols-3 gap-3">
-          <Input
-            placeholder="Agent name"
-            value={newAgent}
-            onChange={(e) => setNewAgent(e.target.value)}
-          />
-          <Input
-            placeholder="Runner URL"
-            value={newUrl}
-            onChange={(e) => setNewUrl(e.target.value)}
-          />
-          <Input
-            placeholder="Runner token"
-            type="password"
-            value={newToken}
-            onChange={(e) => setNewToken(e.target.value)}
-          />
+      {!readOnly && (
+        <div className="border rounded-md p-4 space-y-3">
+          <p className="text-sm font-medium">+ Add agent runner</p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <Input
+              placeholder="Agent name"
+              value={newAgent}
+              onChange={(e) => setNewAgent(e.target.value)}
+            />
+            <Input
+              placeholder="Runner URL"
+              value={newUrl}
+              onChange={(e) => setNewUrl(e.target.value)}
+            />
+            <Input
+              placeholder="Runner token"
+              type="password"
+              value={newToken}
+              onChange={(e) => setNewToken(e.target.value)}
+            />
+          </div>
+          <Button size="sm" onClick={handleAdd} disabled={!newAgent.trim()}>
+            Save
+          </Button>
         </div>
-        <Button size="sm" onClick={handleAdd} disabled={!newAgent.trim()}>
-          Save
-        </Button>
-      </div>
+      )}
     </div>
   );
 }
 
-function SingleRunnerRow({
+/** URL, token and updated cells, shared by the single-agent and all-agents tables. */
+function RunnerCells({
   runner,
   onSave,
-  onClear,
+  readOnly,
 }: {
-  runner: AgentRunner;
-  onSave: (agent: string, field: "runner_url" | "runner_token", value: string) => void;
-  onClear: (agent: string) => void;
+  runner: PublicAgentRunner;
+  onSave: SaveField;
+  readOnly: boolean;
 }) {
   const [editingUrl, setEditingUrl] = useState(false);
   const [urlValue, setUrlValue] = useState(runner.runner_url || "");
   const [editingToken, setEditingToken] = useState(false);
-  const [tokenValue, setTokenValue] = useState(runner.runner_token || "");
+  // The stored token never reaches the browser, so editing always starts blank
+  const [tokenValue, setTokenValue] = useState("");
+
+  function commitToken() {
+    if (tokenValue.trim()) onSave(runner.agent, "runner_token", tokenValue.trim());
+    setTokenValue("");
+    setEditingToken(false);
+  }
 
   return (
-    <TableRow>
+    <>
       <TableCell>
         {editingUrl ? (
           <Input
@@ -263,9 +301,9 @@ function SingleRunnerRow({
           />
         ) : (
           <span
-            className="text-xs cursor-pointer hover:underline"
-            onDoubleClick={() => setEditingUrl(true)}
-            title="Double-click to edit"
+            className={readOnly ? "text-xs" : "text-xs cursor-pointer hover:underline"}
+            onDoubleClick={() => !readOnly && setEditingUrl(true)}
+            title={readOnly ? undefined : "Double-click to edit"}
           >
             {runner.runner_url || <span className="text-muted-foreground italic">not set</span>}
           </span>
@@ -274,23 +312,36 @@ function SingleRunnerRow({
       <TableCell>
         {editingToken ? (
           <Input
+            type="password"
+            placeholder="New token"
             value={tokenValue}
             onChange={(e) => setTokenValue(e.target.value)}
-            onBlur={() => { onSave(runner.agent, "runner_token", tokenValue); setEditingToken(false); }}
+            onBlur={commitToken}
             onKeyDown={(e) => {
-              if (e.key === "Enter") { onSave(runner.agent, "runner_token", tokenValue); setEditingToken(false); }
-              if (e.key === "Escape") { setTokenValue(runner.runner_token || ""); setEditingToken(false); }
+              if (e.key === "Enter") commitToken();
+              if (e.key === "Escape") { setTokenValue(""); setEditingToken(false); }
             }}
             autoFocus
             className="h-7 text-xs"
           />
         ) : (
           <span className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">
-              {runner.runner_token ? "••••••••" : <span className="italic">not set</span>}
+            <span className="font-mono text-xs text-muted-foreground">
+              {runner.has_token ? (
+                `••••${runner.runner_token_hint ?? "••••"}`
+              ) : (
+                <span className="font-sans italic">not set</span>
+              )}
             </span>
-            <Button variant="ghost" size="sm" className="text-xs h-6 px-2" onClick={() => setEditingToken(true)}>
-              edit
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs h-6 px-2"
+              onClick={() => setEditingToken(true)}
+              disabled={readOnly}
+              title={readOnly ? READ_ONLY_TITLE : undefined}
+            >
+              {runner.has_token ? "replace" : "set"}
             </Button>
           </span>
         )}
@@ -298,87 +349,6 @@ function SingleRunnerRow({
       <TableCell className="text-xs text-muted-foreground">
         {relativeTime(runner.updated_at)}
       </TableCell>
-      <TableCell>
-        <Button variant="ghost" size="sm" className="text-xs text-destructive" onClick={() => onClear(runner.agent)}>
-          Remove config
-        </Button>
-      </TableCell>
-    </TableRow>
-  );
-}
-
-function RunnerRow({
-  runner,
-  onSave,
-  onDelete,
-}: {
-  runner: AgentRunner;
-  onSave: (agent: string, field: "runner_url" | "runner_token", value: string) => void;
-  onDelete: (agent: string) => void;
-}) {
-  const [editingUrl, setEditingUrl] = useState(false);
-  const [urlValue, setUrlValue] = useState(runner.runner_url || "");
-  const [editingToken, setEditingToken] = useState(false);
-  const [tokenValue, setTokenValue] = useState(runner.runner_token || "");
-
-  return (
-    <TableRow>
-      <TableCell className="font-medium">{runner.agent}</TableCell>
-      <TableCell>
-        {editingUrl ? (
-          <Input
-            value={urlValue}
-            onChange={(e) => setUrlValue(e.target.value)}
-            onBlur={() => { onSave(runner.agent, "runner_url", urlValue); setEditingUrl(false); }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") { onSave(runner.agent, "runner_url", urlValue); setEditingUrl(false); }
-              if (e.key === "Escape") { setUrlValue(runner.runner_url || ""); setEditingUrl(false); }
-            }}
-            autoFocus
-            className="h-7 text-xs"
-          />
-        ) : (
-          <span
-            className="text-xs cursor-pointer hover:underline"
-            onDoubleClick={() => setEditingUrl(true)}
-            title="Double-click to edit"
-          >
-            {runner.runner_url || <span className="text-muted-foreground italic">not set</span>}
-          </span>
-        )}
-      </TableCell>
-      <TableCell>
-        {editingToken ? (
-          <Input
-            value={tokenValue}
-            onChange={(e) => setTokenValue(e.target.value)}
-            onBlur={() => { onSave(runner.agent, "runner_token", tokenValue); setEditingToken(false); }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") { onSave(runner.agent, "runner_token", tokenValue); setEditingToken(false); }
-              if (e.key === "Escape") { setTokenValue(runner.runner_token || ""); setEditingToken(false); }
-            }}
-            autoFocus
-            className="h-7 text-xs"
-          />
-        ) : (
-          <span className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">
-              {runner.runner_token ? "••••••••" : <span className="italic">not set</span>}
-            </span>
-            <Button variant="ghost" size="sm" className="text-xs h-6 px-2" onClick={() => setEditingToken(true)}>
-              edit
-            </Button>
-          </span>
-        )}
-      </TableCell>
-      <TableCell className="text-xs text-muted-foreground">
-        {relativeTime(runner.updated_at)}
-      </TableCell>
-      <TableCell>
-        <Button variant="ghost" size="sm" className="text-xs text-destructive" onClick={() => onDelete(runner.agent)}>
-          Delete
-        </Button>
-      </TableCell>
-    </TableRow>
+    </>
   );
 }

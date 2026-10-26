@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod/v4";
 import { getServerSupabase } from "@/lib/db/server";
-import { isAuthenticated } from "@/lib/auth";
+import { isOwner } from "@/lib/auth";
 
 const CreateAnnotationSchema = z.object({
   trace_id: z.string().uuid(),
@@ -11,7 +11,7 @@ const CreateAnnotationSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const authed = await isAuthenticated();
+  const authed = await isOwner();
   if (!authed) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

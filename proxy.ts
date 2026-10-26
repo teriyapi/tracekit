@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { COOKIE_NAME, verifySession } from "@/lib/auth/session";
 
 const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/ingest", "/api/experiments"];
 
@@ -7,73 +8,54 @@ function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
 }
 
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
-  }
-  return bytes;
+// The demo may run the judge (it costs money, so it is capped) but write nothing else
+const DEMO_JUDGE_PATH = "/api/judge/score";
+const DEMO_JUDGE_LIMIT_PER_HOUR = 40;
+// Raw export would hand out every conversation in bulk
+const DEMO_BLOCKED_READS = ["/api/export"];
+
+// In memory, so per server instance: a cost cap, not a guarantee
+let judgeWindow = { start: 0, count: 0 };
+
+function takeDemoJudgeSlot(): boolean {
+  const now = Date.now();
+  if (now - judgeWindow.start > 60 * 60 * 1000) judgeWindow = { start: now, count: 0 };
+  if (judgeWindow.count >= DEMO_JUDGE_LIMIT_PER_HOUR) return false;
+  judgeWindow.count++;
+  return true;
 }
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-async function hmacSha256(secret: string, message: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(message));
-  return bytesToHex(new Uint8Array(signature));
-}
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  const aBytes = hexToBytes(a);
-  const bBytes = hexToBytes(b);
-  let result = 0;
-  for (let i = 0; i < aBytes.length; i++) {
-    result |= aBytes[i] ^ bBytes[i];
-  }
-  return result === 0;
-}
-
-async function verifyAuthCookie(cookieValue: string): Promise<boolean> {
-  const secret = process.env.DASHBOARD_PASSWORD!;
-  const [payload, signature] = cookieValue.split(".");
-  if (!payload || !signature) return false;
-
-  try {
-    const expected = await hmacSha256(secret, payload);
-    return timingSafeEqual(signature, expected);
-  } catch {
-    return false;
-  }
+function readOnly(message = "read-only demo") {
+  return NextResponse.json({ error: message }, { status: 403 });
 }
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public paths and static assets
-  if (
-    isPublicPath(pathname) ||
-    pathname.startsWith("/_next") ||
-    pathname.startsWith("/favicon")
-  ) {
+  if (pathname.startsWith("/_next") || pathname.startsWith("/favicon")) {
     return NextResponse.next();
   }
 
-  const cookie = request.cookies.get("tracekit_auth");
-  if (!cookie || !(await verifyAuthCookie(cookie.value))) {
-    const loginUrl = new URL("/login", request.url);
-    return NextResponse.redirect(loginUrl);
+  const role = await verifySession(request.cookies.get(COOKIE_NAME)?.value);
+
+  // Checked before the public paths so a demo cookie can't write through /api/experiments
+  if (role === "demo" && pathname.startsWith("/api/")) {
+    if (DEMO_BLOCKED_READS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+      return readOnly();
+    }
+    const isWrite = !["GET", "HEAD", "OPTIONS"].includes(request.method);
+    if (isWrite && pathname !== "/api/auth/login") {
+      if (pathname !== DEMO_JUDGE_PATH) return readOnly();
+      if (!takeDemoJudgeSlot()) return readOnly("Demo judge limit reached, try again in an hour");
+    }
+  }
+
+  if (isPublicPath(pathname)) {
+    return NextResponse.next();
+  }
+
+  if (!role) {
+    return NextResponse.redirect(new URL("/login", request.url));
   }
 
   return NextResponse.next();

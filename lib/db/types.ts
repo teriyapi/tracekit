@@ -47,6 +47,13 @@ export type AgentRunner = {
   updated_at: string;
 };
 
+/** What the browser gets: never the token itself. */
+export type PublicAgentRunner = Omit<AgentRunner, "runner_token"> & {
+  has_token: boolean;
+  /** Last 4 characters, owner only. */
+  runner_token_hint: string | null;
+};
+
 export type TraceWithLatestAnnotation = Trace & {
   latest_rating: number | null;
   latest_reason: string | null;
@@ -56,4 +63,31 @@ export type TraceWithLatestAnnotation = Trace & {
 
 export type ExperimentWithStats = Experiment & {
   computed_avg_rating: number | null;
+};
+
+export type Criterion = {
+  id: string;
+  text: string;
+  polarity: "do" | "avoid";
+  /** Trace ids that support this criterion. */
+  evidence: string[];
+};
+
+export type Rubric = {
+  id: string;
+  agent: string;
+  version: number;
+  criteria: Criterion[];
+  train_trace_ids: string[];
+  created_at: string;
+};
+
+export type JudgeScore = {
+  id: string;
+  rubric_id: string;
+  trace_id: string;
+  verdict: "hit" | "miss" | "cringe";
+  rationale: string | null;
+  criteria_ids: string[];
+  created_at: string;
 };

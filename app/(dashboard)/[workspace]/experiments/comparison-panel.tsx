@@ -17,6 +17,8 @@ import type { ExperimentWithStats, TraceWithLatestAnnotation } from "@/lib/db/ty
 import { cn } from "@/lib/utils";
 import { InlineEditName } from "./inline-edit-name";
 import { useSelection } from "@/lib/context/selection";
+import { isVerdict } from "@/lib/verdicts";
+import { isStalled, STALLED_TITLE } from "@/lib/experiments";
 
 type PanelData = {
   experiment: ExperimentWithStats;
@@ -50,6 +52,7 @@ export function ComparisonPanel({
   onTraceClick: (trace: TraceWithLatestAnnotation) => void;
 }) {
   const { experiment, traces } = panel;
+  const stalled = isStalled(experiment);
   const { toggleTrace, isTraceSelected, isLastSelected } = useSelection();
 
   // Build rows based on alignment
@@ -62,39 +65,25 @@ export function ComparisonPanel({
         pulsing && "animate-pulse ring-2 ring-primary"
       )}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b shrink-0">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <InlineEditName
-            value={experiment.name}
-            onSave={onRename}
-            experimentId={experiment.id}
-            className="text-sm font-medium"
-          />
-          <StatusBadge status={experiment.status} />
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClose}
-          className="shrink-0 ml-2"
-        >
-          ✕
-        </Button>
-      </div>
-
-      {/* Stats */}
-      <div className="px-3 py-1 text-xs text-muted-foreground border-b shrink-0">
-        {traces.length} rows{(experiment.status === "running" || experiment.status === "pending") && experiment.dataset?.length ? ` / ${experiment.dataset.length}` : ""}
-        {experiment.computed_avg_rating != null && ` • avg ${experiment.computed_avg_rating.toFixed(1)}`}
-      </div>
+      <PanelHeader
+        experiment={experiment}
+        traceCount={traces.length}
+        onClose={onClose}
+        onRename={onRename}
+      />
 
       {/* Body */}
       <div className="flex-1 min-h-0">
         {(experiment.status === "pending" || experiment.status === "running") && traces.length === 0 ? (
           <div className="flex items-center justify-center h-full text-muted-foreground">
-            <RoseLoader size={20} className="mr-2" />
-            {experiment.status === "running" ? "Running…" : "Pending…"}
+            {stalled ? (
+              STALLED_TITLE
+            ) : (
+              <>
+                <RoseLoader size={20} className="mr-2" />
+                {experiment.status === "running" ? "Running…" : "Pending…"}
+              </>
+            )}
           </div>
         ) : experiment.status === "failed" && traces.length === 0 ? (
           <div className="p-3">
@@ -108,7 +97,7 @@ export function ComparisonPanel({
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-popover">
                 <TableRow>
-                  <TableHead className="w-10"></TableHead>
+                  <TableHead className="w-10"><span className="sr-only">Select</span></TableHead>
                   <TableHead>Input</TableHead>
                   <TableHead>Output</TableHead>
                   <TableHead className="w-14">Rating</TableHead>
@@ -148,6 +137,7 @@ export function ComparisonPanel({
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
+                          aria-label="Select trace"
                           checked={isTraceSelected(trace.id)}
                           onChange={() => toggleTrace(trace.id)}
                           className={cn(isLastSelected(trace.id) && "ring-1 ring-foreground ring-offset-1 ring-offset-background")}
@@ -162,20 +152,18 @@ export function ComparisonPanel({
                       <TableCell>
                         {trace.latest_rating ? (
                           <Badge variant="outline">{trace.latest_rating}★</Badge>
-                        ) : (
-                          <span className="text-muted-foreground text-xs">—</span>
-                        )}
+                        ) : null}
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-0.5 flex-wrap">
-                          {(trace.latest_tags || []).slice(0, 2).map((tag) => (
+                          {(trace.latest_tags || []).filter((t) => !isVerdict(t)).slice(0, 2).map((tag) => (
                             <Badge key={tag} variant="outline" className="text-[10px]">
                               {tag}
                             </Badge>
                           ))}
-                          {(trace.latest_tags || []).length > 2 && (
+                          {(trace.latest_tags || []).filter((t) => !isVerdict(t)).length > 2 && (
                             <span className="text-[10px] text-muted-foreground">
-                              +{(trace.latest_tags || []).length - 2}
+                              +{(trace.latest_tags || []).filter((t) => !isVerdict(t)).length - 2}
                             </span>
                           )}
                         </div>
@@ -214,7 +202,61 @@ export function ComparisonPanel({
   );
 }
 
-function StatusBadge({ status }: { status: ExperimentWithStats["status"] }) {
+/** Name, status and row count for one experiment column. Shared by the table and convo views. */
+export function PanelHeader({
+  experiment,
+  traceCount,
+  onClose,
+  onRename,
+}: {
+  experiment: ExperimentWithStats;
+  traceCount: number;
+  onClose: () => void;
+  onRename: (name: string) => void;
+}) {
+  const active = experiment.status === "running" || experiment.status === "pending";
+  return (
+    <>
+      <div className="flex items-center justify-between px-3 py-2 border-b shrink-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <InlineEditName
+            value={experiment.name}
+            onSave={onRename}
+            experimentId={experiment.id}
+            className="text-sm font-medium"
+          />
+          <StatusBadge status={experiment.status} stalled={isStalled(experiment)} />
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onClose}
+          className="shrink-0 ml-2"
+          aria-label="Close experiment"
+        >
+          ✕
+        </Button>
+      </div>
+      <div className="px-3 py-1 text-xs text-muted-foreground border-b shrink-0">
+        <time dateTime={experiment.created_at}>
+          {new Date(experiment.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+        </time>
+        {" • "}
+        {traceCount} rows{active && experiment.dataset?.length ? ` / ${experiment.dataset.length}` : ""}
+        {experiment.computed_avg_rating != null && ` • avg ${experiment.computed_avg_rating.toFixed(1)}`}
+      </div>
+    </>
+  );
+}
+
+function StatusBadge({ status, stalled }: { status: ExperimentWithStats["status"]; stalled: boolean }) {
+  if (stalled) {
+    return (
+      <Badge variant="outline" className="text-[10px]" title={STALLED_TITLE}>
+        stalled
+      </Badge>
+    );
+  }
   switch (status) {
     case "completed":
       return <Badge className="text-[10px]">completed</Badge>;

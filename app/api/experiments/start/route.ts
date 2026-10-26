@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { getServerSupabase } from "@/lib/db/server";
-import { isAuthenticated } from "@/lib/auth";
+import { isOwner } from "@/lib/auth";
 
 export async function POST(request: Request) {
-  const authed = await isAuthenticated();
+  const authed = await isOwner();
   if (!authed) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
       name,
       agent,
       dataset,
-      status: "running",
+      status: "pending",
       trace_count: 0,
     })
     .select("id")

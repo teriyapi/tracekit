@@ -1,33 +1,22 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
-import {
-  DndContext,
-  DragOverlay,
-  useDraggable,
-  useDroppable,
-  type DragEndEvent,
-  type DragStartEvent,
-} from "@dnd-kit/core";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { ChevronRight, CircleCheck, CircleDashed, CircleX, Hourglass, type LucideIcon } from "lucide-react";
 import type { ExperimentWithStats, TraceWithLatestAnnotation } from "@/lib/db/types";
-import { relativeTime, cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { ComparisonPanel } from "./comparison-panel";
+import { ConvoView } from "./convo-view";
+import { Segmented } from "@/components/ui/segmented";
+import { useStoredView, type View } from "@/lib/stored-view";
 import { InlineEditName } from "./inline-edit-name";
-import { TraceSheet } from "@/components/traces/trace-sheet";
+import { TraceSheet, type AnnotationPatch } from "@/components/traces/trace-sheet";
 import { useSelection } from "@/lib/context/selection";
 import { NewExperimentModal } from "./new-experiment-modal";
 import { RoseLoader } from "@/components/ui/rose-loader";
+import { isStalled, STALLED_TITLE } from "@/lib/experiments";
 
 type PanelData = {
   experiment: ExperimentWithStats;
@@ -37,17 +26,28 @@ type PanelData = {
 export function ExperimentsTabClient({
   initialExperiments,
   workspace,
+  readOnly = false,
 }: {
   initialExperiments: ExperimentWithStats[];
   workspace: string;
+  readOnly?: boolean;
 }) {
   const [experiments, setExperiments] = useState(initialExperiments);
   const [panels, setPanels] = useState<PanelData[]>([]);
-  const [draggedId, setDraggedId] = useState<string | null>(null);
   const [pulsingPanelId, setPulsingPanelId] = useState<string | null>(null);
   const [hoveredInputKey, setHoveredInputKey] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
-  const selection = useSelection();
+  const [view, writeView] = useStoredView("tracekit:experiments-view");
+  const groups = useMemo(() => groupByDataset(experiments), [experiments]);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  function toggleGroup(key: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   // Trace sheet state
   const [sheetTrace, setSheetTrace] = useState<TraceWithLatestAnnotation | null>(null);
@@ -153,16 +153,7 @@ export function ExperimentsTabClient({
     }
   }
 
-  function handleDragStart(event: DragStartEvent) {
-    setDraggedId(event.active.id as string);
-  }
-
-  async function handleDragEnd(event: DragEndEvent) {
-    setDraggedId(null);
-    if (!event.over) return;
-
-    const expId = event.active.id as string;
-
+  async function openPanel(expId: string) {
     // Already open?
     if (panels.some((p) => p.experiment.id === expId)) {
       setPulsingPanelId(expId);
@@ -172,18 +163,26 @@ export function ExperimentsTabClient({
 
     // Max 4 panels
     if (panels.length >= 4) {
-      toast.error("Maximum 4 panels. Close one to add another.");
+      toast.error("Maximum 4 experiments side by side. Close one to add another.");
       return;
     }
 
-    // Fetch experiment data
     const res = await fetch(`/api/experiments/${expId}`);
     if (!res.ok) {
       toast.error("Failed to load experiment");
       return;
     }
     const data = await res.json();
-    setPanels((prev) => [...prev, { experiment: data.experiment, traces: data.traces }]);
+    setPanels((prev) =>
+      prev.some((p) => p.experiment.id === expId)
+        ? prev
+        : [...prev, { experiment: data.experiment, traces: data.traces }]
+    );
+  }
+
+  function togglePanel(expId: string) {
+    if (panels.some((p) => p.experiment.id === expId)) closePanel(expId);
+    else openPanel(expId);
   }
 
   function closePanel(expId: string) {
@@ -227,72 +226,111 @@ export function ExperimentsTabClient({
     });
   }, [panels, sheetTrace]);
 
-  const draggedExperiment = draggedId
-    ? experiments.find((e) => e.id === draggedId)
-    : null;
+  function handleTagsSaved(traceId: string, patch: AnnotationPatch) {
+    setPanels((prev) =>
+      prev.map((p) => ({
+        ...p,
+        traces: p.traces.map((t) => (t.id === traceId ? { ...t, ...patch } : t)),
+      }))
+    );
+  }
 
   return (
-    <DndContext id="experiments-dnd" onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div className="flex flex-col h-[calc(100vh-7rem)]">
-        {/* Top bar */}
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Experiments</h2>
-          <Button variant="outline" size="sm" onClick={() => setModalOpen(true)}>
-            + New Experiment
-          </Button>
-        </div>
-
-        {/* Experiments list (top region) */}
-        <div className="border rounded-md mb-4 shrink-0 max-h-48 overflow-y-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-8"></TableHead>
-                  <TableHead className="w-10"></TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead className="w-24">Agent</TableHead>
-                  <TableHead className="w-24">Status</TableHead>
-                  <TableHead className="w-16">Traces</TableHead>
-                  <TableHead className="w-20">Avg Rating</TableHead>
-                  <TableHead className="w-24">Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {experiments.map((exp) => (
-                  <DraggableRow key={exp.id} experiment={exp} onRename={handleRename} />
-                ))}
-                {experiments.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
-                      No experiments yet. Use the SDK to run experiments.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-        </div>
-
-        {/* Drop zone — comparison panels */}
-        <DropZone
-          panels={panels}
-          experiments={experiments}
-          pulsingPanelId={pulsingPanelId}
-          hoveredInputKey={hoveredInputKey}
-          onHoverInputKey={setHoveredInputKey}
-          onClose={closePanel}
-          onRename={handleRename}
-          onTraceClick={handleTraceClick}
-        />
-      </div>
-
-      {/* Drag overlay */}
-      <DragOverlay>
-        {draggedExperiment && (
-          <div className="bg-popover border rounded-md px-3 py-2 shadow-lg text-sm">
-            {draggedExperiment.name}
+    <>
+      <div className="flex h-[calc(100vh-7rem)] gap-4 max-md:flex-col">
+        {/* Experiment picker: click one to open it, click more to compare side by side */}
+        <aside className="flex w-80 shrink-0 flex-col overflow-hidden rounded-md border max-md:max-h-64 max-md:w-full">
+          <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+            <h1 className="text-sm font-semibold">Experiments</h1>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setModalOpen(true)}
+              disabled={readOnly}
+              title={readOnly ? "Read-only demo" : undefined}
+            >
+              + New
+            </Button>
           </div>
-        )}
-      </DragOverlay>
+          <div className="flex-1 min-h-0 overflow-y-auto px-1 pb-1">
+            {groups.map((group) => {
+              const expanded = !collapsed.has(group.key);
+              return (
+                <div key={group.key} className="pb-1">
+                  <h2 className="sticky top-0 z-10 bg-background pt-1">
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      onClick={() => toggleGroup(group.key)}
+                      title={group.preview ? `First item: ${group.preview}` : undefined}
+                      className="flex w-full items-center gap-1.5 rounded-sm px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <ChevronRight className={cn("size-3.5 shrink-0 transition-transform duration-150", expanded && "rotate-90")} aria-hidden />
+                      <span className="min-w-0 flex-1 truncate font-medium text-foreground">{group.label}</span>
+                      <span className="shrink-0 tabular-nums">
+                        {group.size} {group.size === 1 ? "trace" : "traces"}
+                      </span>
+                    </button>
+                  </h2>
+                  {expanded && (
+                    <div className="space-y-px">
+                      {group.experiments.map((exp) => (
+                        <ExperimentItem
+                          key={exp.id}
+                          experiment={exp}
+                          open={panels.some((p) => p.experiment.id === exp.id)}
+                          onToggle={() => togglePanel(exp.id)}
+                          onRename={handleRename}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {experiments.length === 0 && (
+              <p className="px-3 py-8 text-center text-xs text-muted-foreground">
+                No experiments yet. Use the SDK to run experiments.
+              </p>
+            )}
+          </div>
+        </aside>
+
+        {/* Comparison area */}
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+          <div className="flex shrink-0 items-center gap-3">
+            <Segmented
+              label="View"
+              value={view}
+              onChange={writeView}
+              options={[
+                { value: "convo", label: "convo" },
+                { value: "table", label: "table" },
+              ]}
+            />
+            <span className="truncate text-xs text-muted-foreground">
+              {panels.length === 0
+                ? "Pick an experiment on the left"
+                : panels.length < 4
+                  ? "Pick another to compare side by side"
+                  : "4 side by side (max)"}
+            </span>
+          </div>
+          <ComparisonArea
+            panels={panels}
+            view={view}
+            readOnly={readOnly}
+            paused={sheetOpen}
+            pulsingPanelId={pulsingPanelId}
+            hoveredInputKey={hoveredInputKey}
+            onHoverInputKey={setHoveredInputKey}
+            onClose={closePanel}
+            onRename={handleRename}
+            onTraceClick={handleTraceClick}
+            onTagsSaved={handleTagsSaved}
+          />
+        </section>
+      </div>
 
       {/* Shared trace sheet */}
       <TraceSheet
@@ -300,6 +338,8 @@ export function ExperimentsTabClient({
         open={sheetOpen}
         onOpenChange={setSheetOpen}
         onAnnotationSaved={handleAnnotationSaved}
+        onTagsSaved={handleTagsSaved}
+        readOnly={readOnly}
         traces={panels.flatMap((p) => p.traces)}
         onNavigate={(t) => { setSheetTrace(t); }}
       />
@@ -310,26 +350,71 @@ export function ExperimentsTabClient({
         onOpenChange={setModalOpen}
         onCreated={handleExperimentCreated}
       />
-    </DndContext>
+    </>
   );
 }
 
-function DraggableRow({
+// Runs are named `<base>-YYYY-MM-DD_HH-MM-SS`; the open panel shows when it ran, so the list shows just the base
+const RUN_STAMP = /[-_]\d{4}-\d{2}-\d{2}[_T-]\d{2}-\d{2}(?:-\d{2})?$/;
+
+function shortName(name: string): string {
+  const base = name.replace(RUN_STAMP, "");
+  return base || name;
+}
+
+// Any trailing date, with or without a time (`-2026-05-22-1212`), for naming a group of runs
+const DATE_SUFFIX = /[-_]\d{4}-\d{2}-\d{2}(?:[_T-]\d{2}-?\d{2}(?:-?\d{2})?)?$/;
+
+type DatasetGroup = { key: string; label: string; size: number; preview: string; experiments: ExperimentWithStats[] };
+
+function datasetPreview(dataset: unknown[]): string {
+  const first = dataset[0];
+  if (first == null) return "";
+  return typeof first === "string" ? first : JSON.stringify(first);
+}
+
+/**
+ * Runs on the same dataset share a group. Only the JSON's contents are stored, not its file name,
+ * so a group is named after its most common run name. Groups keep the list's newest-first order.
+ */
+function groupByDataset(experiments: ExperimentWithStats[]): DatasetGroup[] {
+  const groups = new Map<string, DatasetGroup>();
+  for (const exp of experiments) {
+    const dataset = Array.isArray(exp.dataset) ? exp.dataset : [];
+    const key = JSON.stringify(dataset);
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, label: "", size: dataset.length, preview: datasetPreview(dataset), experiments: [] };
+      groups.set(key, group);
+    }
+    group.experiments.push(exp);
+  }
+  for (const group of groups.values()) {
+    const counts = new Map<string, number>();
+    for (const exp of group.experiments) {
+      const name = exp.name.replace(DATE_SUFFIX, "") || exp.name;
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    group.label = [...counts].sort((x, y) => y[1] - x[1])[0][0];
+  }
+  return [...groups.values()];
+}
+
+function ExperimentItem({
   experiment,
+  open,
+  onToggle,
   onRename,
 }: {
   experiment: ExperimentWithStats;
+  open: boolean;
+  onToggle: () => void;
   onRename: (id: string, name: string) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: experiment.id,
-  });
-
-  const style = transform
-    ? { transform: `translate(${transform.x}px, ${transform.y}px)` }
-    : undefined;
-
   const { toggleExperiment, isExperimentSelected, isLastSelected } = useSelection();
+  const selected = isExperimentSelected(experiment.id);
+  const stalled = isStalled(experiment);
+  const empty = experiment.trace_count === 0;
 
   async function handleToggle() {
     // Fetch trace IDs for this experiment so they get selected too
@@ -345,55 +430,107 @@ function DraggableRow({
   }
 
   return (
-    <TableRow
-      ref={setNodeRef}
-      style={style}
-      className={cn(isDragging && "opacity-50")}
+    <div
+      onClick={(e) => {
+        // Ignore the second click of a double-click (that renames) and clicks in the rename input
+        if (e.detail > 1 || (e.target as HTMLElement).closest("input")) return;
+        onToggle();
+      }}
+      className={cn(
+        "group relative flex cursor-pointer items-start gap-2 rounded-sm px-2 py-2 transition-colors has-[[data-compare-toggle]:focus-visible]:ring-2 has-[[data-compare-toggle]:focus-visible]:ring-ring",
+        open ? "bg-muted" : "hover:bg-muted/50"
+      )}
     >
-      <TableCell>
-        <span
-          {...attributes}
-          {...listeners}
-          className="cursor-grab active:cursor-grabbing text-muted-foreground"
-        >
-          ⠿
-        </span>
-      </TableCell>
-      <TableCell onClick={(e) => e.stopPropagation()}>
-        <input
-          type="checkbox"
-          checked={isExperimentSelected(experiment.id)}
-          onChange={handleToggle}
-          className={cn(isLastSelected(experiment.id) && "ring-1 ring-foreground ring-offset-1 ring-offset-background")}
-        />
-      </TableCell>
-      <TableCell>
+      {/* Keyboard and screen-reader way to open it; the row's click is a mouse shortcut */}
+      <button
+        type="button"
+        data-compare-toggle
+        aria-pressed={open}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle();
+        }}
+        className="sr-only"
+      >
+        {open ? "Close" : "Compare"} {experiment.name}
+      </button>
+      {/* Export selection: out of the way until you hover, focus or check it */}
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={handleToggle}
+        onClick={(e) => e.stopPropagation()}
+        aria-label={`Select ${experiment.name} for export`}
+        className={cn(
+          "mt-[3px] transition-opacity",
+          selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+          isLastSelected(experiment.id) && "ring-1 ring-foreground ring-offset-1 ring-offset-background"
+        )}
+      />
+      <div className={cn("min-w-0 flex-1 space-y-1", empty && !open && "opacity-60")}>
         <InlineEditName
           value={experiment.name}
+          display={shortName(experiment.name)}
           onSave={(name) => onRename(experiment.id, name)}
           experimentId={experiment.id}
+          className={cn("block min-w-0 truncate text-sm", open && "font-medium")}
         />
-      </TableCell>
-      <TableCell>
-        <Badge variant="secondary">{experiment.agent}</Badge>
-      </TableCell>
-      <TableCell>
-        <StatusBadge status={experiment.status} error={experiment.error} />
-      </TableCell>
-      <TableCell className="text-xs">{experiment.trace_count}</TableCell>
-      <TableCell className="text-xs">
-        {experiment.computed_avg_rating != null
-          ? experiment.computed_avg_rating.toFixed(1)
-          : "—"}
-      </TableCell>
-      <TableCell className="text-xs text-muted-foreground">
-        {relativeTime(experiment.created_at)}
-      </TableCell>
-    </TableRow>
+        <div className="text-xs text-muted-foreground" title={experiment.agent}>
+          <RunStatus status={experiment.status} error={experiment.error} stalled={stalled} />
+        </div>
+      </div>
+    </div>
   );
 }
 
-function StatusBadge({ status, error }: { status: ExperimentWithStats["status"]; error?: string | null }) {
+/** Status as an icon and a word, quiet enough to sit inline with the trace count. */
+function RunStatus({
+  status,
+  error,
+  stalled,
+}: {
+  status: ExperimentWithStats["status"];
+  error?: string | null;
+  stalled: boolean;
+}) {
+  if (status === "running" && !stalled) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <RoseLoader size={12} color="var(--muted-foreground)" /> running
+      </span>
+    );
+  }
+  const [label, Icon, iconClass, text, title]: [string, LucideIcon, string, string, string | undefined] = stalled
+    ? ["stalled", Hourglass, "text-verdict-miss", "", STALLED_TITLE]
+    : status === "failed"
+      ? ["failed", CircleX, "", "text-destructive", error || "Experiment failed"]
+      : status === "completed"
+        ? ["completed", CircleCheck, "text-verdict-hit", "", undefined]
+        : [status, CircleDashed, "", "", undefined];
+  return (
+    <span className={cn("inline-flex items-center gap-1.5", text)} title={title}>
+      <Icon className={cn("size-3.5 shrink-0", iconClass)} aria-hidden />
+      {label}
+    </span>
+  );
+}
+
+export function StatusBadge({
+  status,
+  error,
+  stalled,
+}: {
+  status: ExperimentWithStats["status"];
+  error?: string | null;
+  stalled?: boolean;
+}) {
+  if (stalled) {
+    return (
+      <Badge variant="outline" title={STALLED_TITLE}>
+        stalled
+      </Badge>
+    );
+  }
   switch (status) {
     case "completed":
       return <Badge>completed</Badge>;
@@ -414,64 +551,78 @@ function StatusBadge({ status, error }: { status: ExperimentWithStats["status"];
   }
 }
 
-function DropZone({
+function ComparisonArea({
   panels,
-  experiments,
+  view,
+  readOnly,
+  paused,
   pulsingPanelId,
   hoveredInputKey,
   onHoverInputKey,
   onClose,
   onRename,
   onTraceClick,
+  onTagsSaved,
 }: {
   panels: PanelData[];
-  experiments: ExperimentWithStats[];
+  view: View;
+  readOnly: boolean;
+  paused: boolean;
   pulsingPanelId: string | null;
   hoveredInputKey: string | null;
   onHoverInputKey: (key: string | null) => void;
   onClose: (id: string) => void;
   onRename: (id: string, name: string) => void;
   onTraceClick: (trace: TraceWithLatestAnnotation) => void;
+  onTagsSaved: (traceId: string, patch: AnnotationPatch) => void;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: "comparison-drop-zone" });
-
   // Compute alignment
   const aligned = computeAlignment(panels);
 
   return (
     <div
-      ref={setNodeRef}
       className={cn(
-        "flex-1 min-h-0 border-2 border-dashed rounded-lg transition-colors",
-        isOver ? "border-primary bg-primary/5" : "border-border",
-        panels.length === 0 && "flex items-center justify-center"
+        "flex-1 min-h-0 overflow-hidden rounded-lg border transition-colors",
+        panels.length === 0 ? "border-border" : "border-transparent",
+        panels.length === 0 && "flex items-center justify-center border-dashed"
       )}
     >
       {panels.length === 0 ? (
         <div className="text-center text-muted-foreground space-y-2">
-          <div className="text-3xl">↑</div>
-          <p>Drag an experiment from above to start comparing</p>
+          <div className="text-3xl">←</div>
+          <p>Pick an experiment to read its conversations</p>
+          <p className="text-xs">Pick two or more to compare replies side by side</p>
         </div>
+      ) : view === "convo" ? (
+        <ConvoView
+          panels={panels}
+          aligned={!aligned.mismatch}
+          pulsingPanelId={pulsingPanelId}
+          readOnly={readOnly}
+          paused={paused}
+          onClose={onClose}
+          onRename={onRename}
+          onTagsSaved={onTagsSaved}
+          onOpenDetails={onTraceClick}
+        />
       ) : (
-        <div className="h-full flex flex-col overflow-hidden">
-          <div
-            className="flex-1 min-h-0 grid gap-2 p-2 overflow-hidden"
-            style={{ gridTemplateColumns: `repeat(${panels.length}, 1fr)` }}
-          >
-            {panels.map((panel) => (
-              <ComparisonPanel
-                key={panel.experiment.id}
-                panel={panel}
-                alignedKeys={aligned.mismatch ? null : aligned.keys}
-                pulsing={pulsingPanelId === panel.experiment.id}
-                hoveredInputKey={hoveredInputKey}
-                onHoverInputKey={onHoverInputKey}
-                onClose={() => onClose(panel.experiment.id)}
-                onRename={(name) => onRename(panel.experiment.id, name)}
-                onTraceClick={onTraceClick}
-              />
-            ))}
-          </div>
+        <div
+          className="h-full grid gap-3 overflow-hidden"
+          style={{ gridTemplateColumns: `repeat(${panels.length}, minmax(0, 1fr))` }}
+        >
+          {panels.map((panel) => (
+            <ComparisonPanel
+              key={panel.experiment.id}
+              panel={panel}
+              alignedKeys={aligned.mismatch ? null : aligned.keys}
+              pulsing={pulsingPanelId === panel.experiment.id}
+              hoveredInputKey={hoveredInputKey}
+              onHoverInputKey={onHoverInputKey}
+              onClose={() => onClose(panel.experiment.id)}
+              onRename={(name) => onRename(panel.experiment.id, name)}
+              onTraceClick={onTraceClick}
+            />
+          ))}
         </div>
       )}
     </div>

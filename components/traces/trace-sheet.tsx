@@ -13,9 +13,15 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft } from "lucide-react";
+import { toast } from "sonner";
 import type { TraceWithLatestAnnotation, Annotation } from "@/lib/db/types";
 import { relativeTime, formatCost, formatLatency, cn } from "@/lib/utils";
+import { extractExchange } from "@/lib/conversation";
+import { isVerdict } from "@/lib/verdicts";
 import { AnnotationForm } from "./annotation-form";
+import { AnnotationBar } from "./annotation-bar";
+import { TagPicker } from "./tag-picker";
+import { AGENT_BUBBLE, USER_BUBBLE } from "./bubbles";
 import { useSelection } from "@/lib/context/selection";
 
 type CorrelationGroup = {
@@ -25,20 +31,43 @@ type CorrelationGroup = {
   traces: TraceWithLatestAnnotation[];
 };
 
+export type AnnotationPatch = Pick<
+  TraceWithLatestAnnotation,
+  "latest_rating" | "latest_reason" | "latest_tags" | "latest_annotation_at"
+>;
+
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName;
+  if (tag === "INPUT") {
+    // Checkboxes and buttons don't take text; the sheet opens with focus on the select checkbox.
+    const type = (el as HTMLInputElement).type;
+    return !["checkbox", "radio", "button", "submit", "reset"].includes(type);
+  }
+  return tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+}
+
 export function TraceSheet({
   trace,
   open,
   onOpenChange,
   onAnnotationSaved,
+  onTagsSaved,
   traces,
   onNavigate,
+  readOnly = false,
 }: {
   trace: TraceWithLatestAnnotation | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAnnotationSaved: () => void;
+  /** Called after tags or a note are saved so the parent can patch its row without refetching. */
+  onTagsSaved?: (traceId: string, patch: AnnotationPatch) => void;
   traces?: TraceWithLatestAnnotation[];
   onNavigate?: (trace: TraceWithLatestAnnotation) => void;
+  readOnly?: boolean;
 }) {
   const { toggleTrace, isTraceSelected, isLastSelected } = useSelection();
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -50,7 +79,20 @@ export function TraceSheet({
   const [currentTrace, setCurrentTrace] = useState<TraceWithLatestAnnotation | null>(null);
   const [navigating, setNavigating] = useState(false);
 
+  // Triage state
+  const [note, setNote] = useState("");
+  // Saved tags shown before the server confirms
+  const [optimisticTags, setOptimisticTags] = useState<Record<string, string[]>>({});
+
   const activeTrace = currentTrace || trace;
+  // Prefer the parent's copy of the row: it carries tags patched in after save.
+  const liveTrace = activeTrace ? traces?.find((t) => t.id === activeTrace.id) ?? activeTrace : null;
+  const tagsOf = (t: TraceWithLatestAnnotation) => optimisticTags[t.id] ?? t.latest_tags ?? [];
+  // Old hit/miss/cringe tags stay in the data but never show
+  const visibleTagsOf = (t: TraceWithLatestAnnotation) => tagsOf(t).filter((tag) => !isVerdict(tag));
+  const visibleTags = liveTrace ? visibleTagsOf(liveTrace) : [];
+
+  const taggedCount = traces ? traces.filter((t) => visibleTagsOf(t).length > 0).length : 0;
 
   const fetchTraceData = useCallback(
     (t: TraceWithLatestAnnotation) => {
@@ -85,12 +127,14 @@ export function TraceSheet({
       setHistory([]);
       setAnnotations([]);
       setCorrelations([]);
+      setNote(trace.latest_reason ?? "");
       fetchTraceData(trace);
     } else if (!open) {
       setAnnotations([]);
       setCorrelations([]);
       setCurrentTrace(null);
       setHistory([]);
+      setNote("");
     }
   }, [trace, open, fetchTraceData]);
 
@@ -135,28 +179,79 @@ export function TraceSheet({
     fetchTraceData(prev);
   }
 
-  // Keyboard navigation: arrow keys to flip through traces, Esc to close
+  /** Save tags with the current note. */
+  const saveAnnotation = useCallback(
+    (tags: string[]) => {
+      if (!liveTrace || readOnly) return;
+      const traceId = liveTrace.id;
+      const reason = note.trim() || null;
+      const rating = liveTrace.latest_rating;
+
+      setOptimisticTags((prev) => ({ ...prev, [traceId]: tags }));
+
+      fetch("/api/annotations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trace_id: traceId,
+          rating: rating ?? undefined,
+          reason: reason ?? undefined,
+          tags,
+        }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || "Failed to save");
+          }
+          onTagsSaved?.(traceId, {
+            latest_tags: tags,
+            latest_reason: reason,
+            latest_rating: rating,
+            latest_annotation_at: new Date().toISOString(),
+          });
+        })
+        .catch((err: Error) => {
+          setOptimisticTags((prev) => {
+            const next = { ...prev };
+            delete next[traceId];
+            return next;
+          });
+          toast.error(err.message);
+        });
+    },
+    [liveTrace, readOnly, note, onTagsSaved]
+  );
+
+  function saveNoteIfChanged() {
+    if (!liveTrace) return;
+    if (note.trim() === (liveTrace.latest_reason ?? "").trim()) return;
+    saveAnnotation(tagsOf(liveTrace));
+  }
+
+  function setVisibleTags(next: string[]) {
+    if (!liveTrace) return;
+    saveAnnotation([...next, ...tagsOf(liveTrace).filter(isVerdict)]);
+  }
+
+  // Keyboard: ← → flip through traces
   useEffect(() => {
-    if (!open || !traces || traces.length === 0) return;
+    if (!open) return;
 
     function handleKeyDown(e: KeyboardEvent) {
-      // Don't capture if user is typing in an input/textarea
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (isTypingTarget(e.target)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
 
-      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && traces && traces.length > 0) {
         e.preventDefault();
         const currentId = activeTrace?.id;
-        const idx = traces!.findIndex((t) => t.id === currentId);
+        const idx = traces.findIndex((t) => t.id === currentId);
         if (idx === -1) return;
 
         const nextIdx = e.key === "ArrowLeft" ? idx - 1 : idx + 1;
-        if (nextIdx < 0 || nextIdx >= traces!.length) return;
+        if (nextIdx < 0 || nextIdx >= traces.length) return;
 
-        const nextTrace = traces![nextIdx];
-        if (onNavigate) {
-          onNavigate(nextTrace);
-        }
+        onNavigate?.(traces[nextIdx]);
       }
     }
 
@@ -164,11 +259,13 @@ export function TraceSheet({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, traces, activeTrace, onNavigate]);
 
-  if (!activeTrace) return null;
+  const exchange = activeTrace ? extractExchange(activeTrace) : null;
 
+  // The Sheet stays mounted with no trace so its first open animates in like the rest
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-[70vw] sm:max-w-[70vw] p-0">
+    <Sheet open={open && Boolean(liveTrace)} onOpenChange={onOpenChange}>
+      <SheetContent className="w-[70vw] sm:max-w-[70vw] p-0 max-sm:w-full">
+        {activeTrace && liveTrace && exchange && (
         <ScrollArea className="h-full">
           <div className="p-6 space-y-6">
             <SheetHeader>
@@ -189,6 +286,7 @@ export function TraceSheet({
                 >
                   <input
                     type="checkbox"
+                    aria-label="Select trace"
                     checked={isTraceSelected(activeTrace.id)}
                     onChange={() => toggleTrace(activeTrace.id)}
                     className={cn(
@@ -202,7 +300,7 @@ export function TraceSheet({
                   {relativeTime(activeTrace.created_at)}
                 </span>
               </SheetTitle>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <p className="text-xs text-muted-foreground">
                   {activeTrace.created_at}
                 </p>
@@ -211,122 +309,165 @@ export function TraceSheet({
                     · {traces.findIndex((t) => t.id === activeTrace.id) + 1} of {traces.length} <span className="opacity-50">← →</span>
                   </span>
                 )}
+                {traces && traces.length > 0 && (
+                  <span className="ml-auto font-mono text-xs text-muted-foreground tabular-nums">
+                    {taggedCount} tagged · {traces.length - taggedCount} left
+                  </span>
+                )}
               </div>
             </SheetHeader>
 
-            {navigating && (
-              <div className="space-y-4">
-                <Skeleton className="h-20 w-full" />
-                <Skeleton className="h-32 w-full" />
-              </div>
-            )}
-
-            {!navigating && (
-              <>
-                <Separator />
-
-                <div>
-                  <h3 className="text-sm font-medium mb-2">Input</h3>
-                  <pre className="text-xs font-mono bg-muted p-3 rounded-md overflow-auto whitespace-pre-wrap max-h-96">
-                    {JSON.stringify(activeTrace.input, null, 2)}
-                  </pre>
-                </div>
-
-                <div>
-                  <h3 className="text-sm font-medium mb-2">Output</h3>
-                  <pre className="text-xs font-mono bg-muted p-3 rounded-md overflow-auto whitespace-pre-wrap max-h-96">
-                    {activeTrace.output}
-                  </pre>
-                </div>
-
-                <div>
-                  <h3 className="text-sm font-medium mb-2">Metadata</h3>
-                  <div className="grid grid-cols-3 gap-2 text-xs mb-2">
-                    <div>
-                      <span className="text-muted-foreground">Model: </span>
-                      <span>{activeTrace.model || "—"}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Latency: </span>
-                      <span>{formatLatency(activeTrace.latency_ms)}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Cost: </span>
-                      <span>{formatCost(activeTrace.cost_usd)}</span>
-                    </div>
-                  </div>
-                  {Object.keys(activeTrace.metadata || {}).length > 0 && (
-                    <pre className="text-xs font-mono bg-muted p-3 rounded-md overflow-auto whitespace-pre-wrap max-h-96">
-                      {JSON.stringify(activeTrace.metadata, null, 2)}
-                    </pre>
-                  )}
-                </div>
-
-                <Separator />
-
-                <div>
-                  <h3 className="text-sm font-medium mb-3">Annotate</h3>
-                  <AnnotationForm
-                    traceId={activeTrace.id}
-                    latestAnnotation={annotations[0] || null}
-                    onSaved={handleSaved}
+            <div
+              key={activeTrace.id}
+              className="space-y-6"
+            >
+              <AnnotationBar
+                note={note}
+                onNoteChange={setNote}
+                onSubmitNote={saveNoteIfChanged}
+                disabled={readOnly}
+                disabledReason="Read-only demo"
+                actions={
+                  <TagPicker
+                    value={visibleTags}
+                    onChange={setVisibleTags}
+                    disabled={readOnly}
+                    label={visibleTags.length > 0 ? `Tags · ${visibleTags.length}` : "+ Tag"}
                   />
-                </div>
+                }
+              />
 
-                {annotations.length > 0 && (
-                  <div>
-                    <Separator className="mb-4" />
-                    <h3 className="text-sm font-medium mb-3">
-                      Annotation History
-                    </h3>
+              {navigating && (
+                <div className="space-y-4">
+                  <Skeleton className="h-20 w-full" />
+                  <Skeleton className="h-32 w-full" />
+                </div>
+              )}
+
+              {!navigating && (
+                <>
+                  {exchange.userTurns.length > 0 ? (
                     <div className="space-y-3">
-                      {annotations.map((ann) => (
-                        <div
-                          key={ann.id}
-                          className="text-xs border rounded-md p-3 space-y-1"
-                        >
-                          <div className="flex items-center gap-2">
-                            {ann.rating && (
-                              <Badge variant="outline">{ann.rating}★</Badge>
-                            )}
-                            <span className="text-muted-foreground">
-                              {relativeTime(ann.created_at)}
-                            </span>
-                          </div>
-                          {ann.reason && (
-                            <p className="text-muted-foreground">
-                              {ann.reason}
-                            </p>
-                          )}
-                          {ann.tags.length > 0 && (
-                            <div className="flex gap-1 flex-wrap">
-                              {ann.tags.map((tag) => (
-                                <Badge
-                                  key={tag}
-                                  variant="outline"
-                                  className="text-xs"
-                                >
-                                  {tag}
-                                </Badge>
-                              ))}
-                            </div>
-                          )}
+                      {exchange.userTurns.map((turn, i) => (
+                        <div key={i} className="flex justify-end">
+                          <p className={USER_BUBBLE}>
+                            {turn || <span className="italic">(empty message)</span>}
+                          </p>
                         </div>
                       ))}
+                      <p className={AGENT_BUBBLE}>{exchange.reply}</p>
                     </div>
-                  </div>
-                )}
+                  ) : (
+                    <div>
+                      <h3 className="text-sm font-medium mb-2">Output</h3>
+                      <pre className="text-xs font-mono bg-muted p-3 rounded-md overflow-auto whitespace-pre-wrap max-h-96">
+                        {activeTrace.output}
+                      </pre>
+                    </div>
+                  )}
 
-                {/* Related Traces */}
-                <RelatedTraces
-                  correlations={correlations}
-                  loading={correlationsLoading}
-                  onTraceClick={navigateToTrace}
-                />
-              </>
-            )}
+                  <Separator />
+
+                  <details className="group" open={exchange.userTurns.length === 0}>
+                    <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
+                      Raw input
+                    </summary>
+                    <pre className="mt-2 text-xs font-mono bg-muted p-3 rounded-md overflow-auto whitespace-pre-wrap max-h-96">
+                      {JSON.stringify(activeTrace.input, null, 2)}
+                    </pre>
+                  </details>
+
+                  <div>
+                    <h3 className="text-sm font-medium mb-2">Metadata</h3>
+                    <div className="grid grid-cols-3 gap-2 text-xs mb-2">
+                      <div>
+                        <span className="text-muted-foreground">Model: </span>
+                        <span>{activeTrace.model || "—"}</span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">Latency: </span>
+                        <span>{formatLatency(activeTrace.latency_ms)}</span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">Cost: </span>
+                        <span>{formatCost(activeTrace.cost_usd)}</span>
+                      </div>
+                    </div>
+                    {Object.keys(activeTrace.metadata || {}).length > 0 && (
+                      <pre className="text-xs font-mono bg-muted p-3 rounded-md overflow-auto whitespace-pre-wrap max-h-96">
+                        {JSON.stringify(activeTrace.metadata, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+
+                  <Separator />
+
+                  <div>
+                    <h3 className="text-sm font-medium mb-3">Annotate</h3>
+                    <AnnotationForm
+                      traceId={activeTrace.id}
+                      latestAnnotation={annotations[0] || null}
+                      onSaved={handleSaved}
+                      disabled={readOnly}
+                    />
+                  </div>
+
+                  {annotations.length > 0 && (
+                    <div>
+                      <Separator className="mb-4" />
+                      <h3 className="text-sm font-medium mb-3">
+                        Annotation History
+                      </h3>
+                      <div className="space-y-3">
+                        {annotations.map((ann) => (
+                          <div
+                            key={ann.id}
+                            className="text-xs border rounded-md p-3 space-y-1"
+                          >
+                            <div className="flex items-center gap-2">
+                              {ann.rating && (
+                                <Badge variant="outline">{ann.rating}★</Badge>
+                              )}
+                              <span className="text-muted-foreground">
+                                {relativeTime(ann.created_at)}
+                              </span>
+                            </div>
+                            {ann.reason && (
+                              <p className="text-muted-foreground">
+                                {ann.reason}
+                              </p>
+                            )}
+                            {ann.tags.length > 0 && (
+                              <div className="flex gap-1 flex-wrap">
+                                {ann.tags.map((tag) => (
+                                  <Badge
+                                    key={tag}
+                                    variant="outline"
+                                    className="text-xs"
+                                  >
+                                    {tag}
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Related Traces */}
+                  <RelatedTraces
+                    correlations={correlations}
+                    loading={correlationsLoading}
+                    onTraceClick={navigateToTrace}
+                  />
+                </>
+              )}
+            </div>
           </div>
         </ScrollArea>
+        )}
       </SheetContent>
     </Sheet>
   );

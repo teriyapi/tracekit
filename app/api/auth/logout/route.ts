@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { COOKIE_NAME } from "@/lib/auth/session";
 
-export async function GET() {
-  const response = NextResponse.redirect(new URL("/login", process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"));
-  response.cookies.set("tracekit_auth", "", { maxAge: 0, path: "/" });
+// Same cookie for owner and demo sessions, so this signs out either
+export async function GET(request: Request) {
+  const response = NextResponse.redirect(new URL("/login", request.url));
+  response.cookies.set(COOKIE_NAME, "", { maxAge: 0, path: "/" });
   return response;
 }

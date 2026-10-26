@@ -3,18 +3,23 @@
 import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useReadOnly } from "@/lib/context/read-only";
 
 export function InlineEditName({
   value,
   onSave,
   experimentId,
+  display,
   className,
 }: {
   value: string;
+  /** What to show when not editing, e.g. a shortened name. Editing always works on the full `value`. */
+  display?: React.ReactNode;
   onSave: (name: string) => void;
   experimentId: string;
   className?: string;
 }) {
+  const readOnly = useReadOnly();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(value);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -82,11 +87,11 @@ export function InlineEditName({
 
   return (
     <span
-      onDoubleClick={() => setEditing(true)}
+      onDoubleClick={() => !readOnly && setEditing(true)}
       className={cn("cursor-default select-none truncate", className)}
-      title="Double-click to rename"
+      title={readOnly ? value : `${value} · double-click to rename`}
     >
-      {value}
+      {display ?? value}
     </span>
   );
 }

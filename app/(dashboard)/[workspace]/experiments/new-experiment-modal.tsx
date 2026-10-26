@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import { RoseLoader } from "@/components/ui/rose-loader";
-import type { AgentRunner } from "@/lib/db/types";
+import type { PublicAgentRunner } from "@/lib/db/types";
 
 function defaultName(): string {
   const d = new Date();
@@ -43,7 +43,7 @@ export function NewExperimentModal({
   const [selectedAgent, setSelectedAgent] = useState<string>("");
   const [customAgent, setCustomAgent] = useState("");
   const [showCustomAgent, setShowCustomAgent] = useState(false);
-  const [runner, setRunner] = useState<AgentRunner | null>(null);
+  const [runner, setRunner] = useState<PublicAgentRunner | null>(null);
   const [runnerLoading, setRunnerLoading] = useState(false);
 
   const [dataset, setDataset] = useState<unknown[] | null>(null);
@@ -64,7 +64,7 @@ export function NewExperimentModal({
     if (open) {
       fetch("/api/agent-runners")
         .then((r) => r.json())
-        .then((data) => { if (Array.isArray(data)) setAgents(data.map((r: AgentRunner) => r.agent)); });
+        .then((data) => { if (Array.isArray(data)) setAgents(data.map((r: PublicAgentRunner) => r.agent)); });
       // Reset form
       setName(defaultName());
       setSelectedAgent("");
@@ -192,14 +192,14 @@ export function NewExperimentModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+        <DialogHeader className="gap-1">
           <DialogTitle>New Experiment</DialogTitle>
           <DialogDescription>
             Configure and launch an experiment run against your agent.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 mt-2">
+        <div className="space-y-5 mt-1">
           {/* Name */}
           <div className="space-y-1.5">
             <Label htmlFor="exp-name">Name</Label>
@@ -290,7 +290,8 @@ export function NewExperimentModal({
 
           {/* Runner status */}
           {effectiveAgent && !runnerLoading && (
-            <div className="text-sm">
+            // 24px off the dataset; the fields' 20px rhythm collapses into this margin
+            <div className="mt-6 text-sm">
               {runner?.runner_url ? (
                 <p className="text-foreground">✓ Runner configured at {hostname}</p>
               ) : (
@@ -326,8 +327,8 @@ export function NewExperimentModal({
           )}
 
           {/* Actions */}
-          <div className="flex gap-2 pt-2">
-            <Button variant="ghost" onClick={() => onOpenChange(false)} className="flex-1">
+          <div className="mt-7 flex gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)} className="flex-1">
               Cancel
             </Button>
             <Button

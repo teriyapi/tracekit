@@ -3,6 +3,8 @@ import { getServerSupabase } from "@/lib/db/server";
 import { SettingsClient } from "./settings-client";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AgentRunner } from "@/lib/db/types";
+import { getRole } from "@/lib/auth";
+import { toPublicRunner } from "@/lib/runners";
 
 async function SettingsData({ workspace }: { workspace: string }) {
   const supabase = getServerSupabase();
@@ -13,12 +15,13 @@ async function SettingsData({ workspace }: { workspace: string }) {
     query = query.eq("agent", workspace);
   }
 
-  const { data } = await query;
+  const [{ data }, role] = await Promise.all([query, getRole()]);
 
   return (
     <SettingsClient
-      initialRunners={(data || []) as AgentRunner[]}
+      initialRunners={((data || []) as AgentRunner[]).map((r) => toPublicRunner(r, role))}
       workspace={workspace}
+      readOnly={role !== "owner"}
     />
   );
 }

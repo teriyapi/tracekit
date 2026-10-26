@@ -14,6 +14,7 @@ export async function GET(request: Request) {
   const model = url.searchParams.get("model");
   const rating = url.searchParams.get("rating");
   const tag = url.searchParams.getAll("tag");
+  const source = url.searchParams.get("source") || "live";
   const q = url.searchParams.get("q");
   const cursor = url.searchParams.get("cursor");
 
@@ -22,10 +23,12 @@ export async function GET(request: Request) {
   let query = supabase
     .from("traces_with_latest_annotation")
     .select("*")
-    .eq("source", "live")
     .order("created_at", { ascending: false })
     .limit(100);
 
+  if (source === "live" || source === "experiment") {
+    query = query.eq("source", source);
+  }
   // workspace supersedes agent if both are passed
   if (workspace && workspace !== "all") {
     query = query.eq("agent", workspace);
@@ -44,7 +47,10 @@ export async function GET(request: Request) {
     query = query.contains("latest_tags", tag);
   }
   if (q) {
-    query = query.or(`output.ilike.%${q}%,input::text.ilike.%${q}%`);
+    // Escape LIKE wildcards, then quote for PostgREST so commas and parens in q can't break the filter
+    const pattern = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
+    const quoted = `"${pattern.replace(/["\\]/g, "\\$&")}"`;
+    query = query.or(`output.ilike.${quoted},input->>user_message.ilike.${quoted}`);
   }
   if (cursor) {
     query = query.lt("created_at", cursor);

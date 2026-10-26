@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod/v4";
 import { getServerSupabase } from "@/lib/db/server";
-import { isAuthenticated, hasValidIngestToken } from "@/lib/auth";
+import { isOwner, hasValidIngestToken } from "@/lib/auth";
 
 const CompleteSchema = z.object({
   status: z.enum(["completed", "failed"]),
@@ -13,7 +13,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   // Auth: dashboard cookie OR ingest token
-  const authed = await isAuthenticated();
+  const authed = await isOwner();
   const hasToken = hasValidIngestToken(request);
   if (!authed && !hasToken) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

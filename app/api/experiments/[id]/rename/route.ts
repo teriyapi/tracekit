@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { getServerSupabase } from "@/lib/db/server";
-import { isAuthenticated } from "@/lib/auth";
+import { isOwner } from "@/lib/auth";
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const authed = await isAuthenticated();
+  const authed = await isOwner();
   if (!authed) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
