@@ -10,6 +10,7 @@ import { ExportModal } from "@/components/export-modal";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import type { Role } from "@/lib/auth/session";
 import { ReadOnlyProvider } from "@/lib/context/read-only";
+import { SUNSET_AGENTS } from "@/lib/agents";
 
 function useWorkspace() {
   const pathname = usePathname();
@@ -157,13 +158,11 @@ function DashboardNav({ role }: { role: Role | null }) {
   );
 }
 
-// Agents that no longer run experiments, and the agent that replaced each
-const SUNSET: Record<string, string> = { pooportpoo: "teri" };
 
 function SunsetBanner() {
   const pathname = usePathname();
   const workspace = useWorkspace();
-  const replacement = SUNSET[workspace];
+  const replacement = SUNSET_AGENTS[workspace];
   if (!replacement) return null;
   // Same tab, on the replacement agent
   const href = `/${replacement}${pathname.slice(workspace.length + 1)}`;

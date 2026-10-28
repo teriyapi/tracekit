@@ -1,17 +1,18 @@
 import { redirect } from "next/navigation";
 import { getServerSupabase } from "@/lib/db/server";
 import { Card, CardContent } from "@/components/ui/card";
+import { SUNSET_AGENTS } from "@/lib/agents";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const supabase = getServerSupabase();
 
-  const { data: recentTrace } = await supabase
-    .from("traces")
-    .select("agent")
-    .order("created_at", { ascending: false })
-    .limit(1);
+  // Open on the most recently active agent, skipping sunset ones
+  const sunset = Object.keys(SUNSET_AGENTS);
+  let query = supabase.from("traces").select("agent").order("created_at", { ascending: false }).limit(1);
+  if (sunset.length > 0) query = query.not("agent", "in", `(${sunset.join(",")})`);
+  const { data: recentTrace } = await query;
 
   if (recentTrace && recentTrace.length > 0) {
     redirect(`/${recentTrace[0].agent}/traces`);
