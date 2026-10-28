@@ -157,6 +157,29 @@ function DashboardNav({ role }: { role: Role | null }) {
   );
 }
 
+// Agents that no longer run experiments, and the agent that replaced each
+const SUNSET: Record<string, string> = { pooportpoo: "teri" };
+
+function SunsetBanner() {
+  const pathname = usePathname();
+  const workspace = useWorkspace();
+  const replacement = SUNSET[workspace];
+  if (!replacement) return null;
+  // Same tab, on the replacement agent
+  const href = `/${replacement}${pathname.slice(workspace.length + 1)}`;
+  return (
+    <div role="status" className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-border bg-muted/40 px-4 py-2 text-sm sm:px-6">
+      <p className="text-muted-foreground">
+        <span className="font-medium text-foreground">{workspace}</span> is now sunset. To run experiments, switch to{" "}
+        {replacement}.
+      </p>
+      <Link href={href} className={buttonVariants({ variant: "outline", size: "xs" })}>
+        Go to {replacement}
+      </Link>
+    </div>
+  );
+}
+
 export function DashboardShell({
   role,
   children,
@@ -169,6 +192,7 @@ export function DashboardShell({
       <SelectionProvider>
         <div className="min-h-screen bg-background flex flex-col">
           <DashboardNav role={role} />
+          <SunsetBanner />
           <main className="flex-1 p-4 sm:p-6">{children}</main>
         </div>
       </SelectionProvider>

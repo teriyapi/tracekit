@@ -40,7 +40,7 @@ export async function POST(request: Request) {
         dataset,
         existing_experiment_id: experiment_id, // tracekit already created the row
         run: async (item) => {
-          const output = await yourAgent.respond(item.user_message || item.input);
+          const output = await yourAgent.respond(item.input ?? item.user_message);
           return { output, model: "claude-haiku-4-5-20251001" };
         },
       });
@@ -69,7 +69,7 @@ Note: `TRACEKIT_INGEST_TOKEN` is passed dynamically via `callback_token` in the 
 {
   "experiment_id": "uuid",
   "name": "experiment-2026-05-03-1430",
-  "dataset": [{"user_message": "hello"}, {"user_message": "world"}],
+  "dataset": [{"input": "hello"}, {"input": "world"}],
   "callback_token": "<TRACEKIT_INGEST_TOKEN>"
 }
 ```

@@ -349,6 +349,7 @@ export function ExperimentsTabClient({
         open={modalOpen}
         onOpenChange={setModalOpen}
         onCreated={handleExperimentCreated}
+        agent={workspace === "all" ? undefined : workspace}
       />
     </>
   );

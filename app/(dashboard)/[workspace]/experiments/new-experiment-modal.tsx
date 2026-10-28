@@ -33,10 +33,13 @@ export function NewExperimentModal({
   open,
   onOpenChange,
   onCreated,
+  agent,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (experimentId: string) => void;
+  /** The workspace's agent. Only the "all" workspace asks which agent to run. */
+  agent?: string;
 }) {
   const [name, setName] = useState(defaultName());
   const [agents, setAgents] = useState<string[]>([]);
@@ -56,13 +59,13 @@ export function NewExperimentModal({
   const [submitting, setSubmitting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const effectiveAgent = showCustomAgent ? customAgent.trim() : selectedAgent;
+  const effectiveAgent = agent ?? (showCustomAgent ? customAgent.trim() : selectedAgent);
   const canSubmit = name.trim() && effectiveAgent && dataset && dataset.length > 0 && runner?.runner_url;
 
   // Fetch agents (only those with runners configured)
   useEffect(() => {
     if (open) {
-      fetch("/api/agent-runners")
+      if (!agent) fetch("/api/agent-runners")
         .then((r) => r.json())
         .then((data) => { if (Array.isArray(data)) setAgents(data.map((r: PublicAgentRunner) => r.agent)); });
       // Reset form
@@ -78,7 +81,7 @@ export function NewExperimentModal({
       setShowCli(false);
       setRunner(null);
     }
-  }, [open]);
+  }, [open, agent]);
 
   // Fetch runner when agent changes
   useEffect(() => {
@@ -195,7 +198,13 @@ export function NewExperimentModal({
         <DialogHeader className="gap-1">
           <DialogTitle>New Experiment</DialogTitle>
           <DialogDescription>
-            Configure and launch an experiment run against your agent.
+            {agent ? (
+              <>
+                Run a dataset against <span className="font-medium text-foreground">{agent}</span>.
+              </>
+            ) : (
+              "Configure and launch an experiment run against your agent."
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -210,7 +219,8 @@ export function NewExperimentModal({
             />
           </div>
 
-          {/* Agent */}
+          {/* Agent: only asked in the "all" workspace */}
+          {!agent && (
           <div className="space-y-1.5">
             <Label>Agent</Label>
             {!showCustomAgent ? (
@@ -239,6 +249,7 @@ export function NewExperimentModal({
               </div>
             )}
           </div>
+          )}
 
           {/* Dataset */}
           <div className="space-y-1.5">
@@ -275,7 +286,7 @@ export function NewExperimentModal({
             ) : (
               <div className="space-y-2">
                 <Textarea
-                  placeholder='[{"user_message": "hello"}, ...]'
+                  placeholder='[{"input": "hello"}, ...]'
                   value={pasteValue}
                   onChange={(e) => {
                     setPasteValue(e.target.value);
