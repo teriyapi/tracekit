@@ -83,8 +83,9 @@ export function NewExperimentModal({
     }
   }, [open, agent]);
 
-  // Fetch runner when agent changes
+  // Fetch the runner on open and whenever the agent changes. Opening resets the form, so a fetch from before it opened would be wiped.
   useEffect(() => {
+    if (!open) return;
     if (!effectiveAgent) {
       setRunner(null);
       return;
@@ -103,7 +104,7 @@ export function NewExperimentModal({
         setRunner(null);
         setRunnerLoading(false);
       });
-  }, [effectiveAgent]);
+  }, [open, effectiveAgent]);
 
   function validateDataset(raw: string): boolean {
     setDatasetError("");
